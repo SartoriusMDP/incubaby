@@ -1,0 +1,5 @@
+# run below to download the adafruit module
+cd ~/sht45
+python3 -m venv .venv
+source .venv/bin/activate
+pip install adafruit-blinka adafruit-circuitpython-sht4x

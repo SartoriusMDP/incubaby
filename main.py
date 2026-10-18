@@ -5,6 +5,36 @@ import adafruit_tca9548a
 from gpiozero import PWMOutputDevice
 from simple_pid import PID
 
+import csv
+import os
+from datetime import datetime
+
+# ---------------------------------------------------------
+# CSV Data Logging
+# ---------------------------------------------------------
+DATA_DIR = "sensor_data"
+os.makedirs(DATA_DIR, exist_ok=True)
+
+TODAY = datetime.now().strftime("%Y-%m-%d")
+CSV_FILE = os.path.join(DATA_DIR, f"{TODAY}.csv")
+
+# Create the CSV header only if the file doesn't exist yet
+if not os.path.exists(CSV_FILE):
+    with open(CSV_FILE, "w", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow([
+            "Timestamp",
+            "Sensor_Channel",
+            "Temperature_C",
+            "Temperature_F",
+            "Humidity_RH",
+            "Average_Temperature_C",
+            "Heatpad_Duty_Percent",
+            "Fan_Duty_Percent"
+        ])
+
+print(f"Logging sensor data to: {CSV_FILE}")
+
 # ---------------------------------------------------------
 # 1. Hardware Initialization
 # ---------------------------------------------------------
@@ -84,7 +114,29 @@ try:
         heatpad.value = p_duty_cycle
 
         # Step C2: Fan on at or above FAN_ON_TEMP_C, off below it
-        fan.value = FAN_SPEED if temp_c >= FAN_ON_TEMP_C else 0
+        # fan.value = FAN_SPEED if temp_c >= FAN_ON_TEMP_C else 0
+        fan.value = FAN_SPEED
+
+        # Step C3: Save sensor readings to CSV
+        timestamp = datetime.now().isoformat(timespec="seconds")
+
+        with open(CSV_FILE, "a", newline="") as f:
+            writer = csv.writer(f)
+
+            for channel, (ch_temp, ch_humidity) in readings.items():
+                writer.writerow([
+                    timestamp,
+                    channel,
+                    round(ch_temp, 2),
+                    round(ch_temp * 9 / 5 + 32, 2),
+                    round(ch_humidity, 1),
+                    round(temp_c, 2),
+                    round(p_duty_cycle * 100, 1),
+                    round(fan.value * 100, 1)
+                ])
+
+            f.flush()
+
         
         # Step D: Log operational metrics
         for channel, (ch_temp, ch_humidity) in readings.items():
