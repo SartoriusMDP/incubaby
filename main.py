@@ -1,20 +1,42 @@
 import time
 import board
 import adafruit_sht4x
+import adafruit_tca9548a
 from gpiozero import PWMOutputDevice
 from simple_pid import PID
 
 # ---------------------------------------------------------
 # 1. Hardware Initialization
 # ---------------------------------------------------------
-# Sensor Setup
+# Sensor Setup: SparkFun Qwiic Mux (TCA9548A, default address 0x70)
 i2c = board.I2C()
-sht = adafruit_sht4x.SHT4x(i2c)
-sht.mode = adafruit_sht4x.Mode.NOHEAT_HIGHPRECISION
+mux = adafruit_tca9548a.TCA9548A(i2c)
+
+# Find an SHT45 on each mux channel (0-7); skip empty channels
+sensors = {}
+for channel in range(8):
+    try:
+        sht = adafruit_sht4x.SHT4x(mux[channel])
+        sht.mode = adafruit_sht4x.Mode.NOHEAT_HIGHPRECISION
+        sensors[channel] = sht
+        print(f"Found SHT45 on mux channel {channel}")
+    except (ValueError, OSError, RuntimeError):
+        pass
+
+if not sensors:
+    raise RuntimeError("No SHT45 sensors found on any mux channel")
 
 # MOSFET Output Pin (GPIO 18 / Pin 12 physically)
 # frequency=1000 Hz provides smooth DC PWM switching
 heatpad = PWMOutputDevice(pin=18, frequency=1000)
+
+# Fan PWM Pin (GPIO 13 / Pin 33 physically)
+# 10 kHz is the highest frequency lgpio supports; 4-pin PC fans expect ~25 kHz
+# but generally accept this. FAN_SPEED is 0.0 (off) to 1.0 (full speed).
+# Testing: fan runs at FAN_SPEED when avg temp >= FAN_ON_TEMP_C, else off.
+FAN_SPEED = 1.0
+FAN_ON_TEMP_C = 26.0
+fan = PWMOutputDevice(pin=13, frequency=10000)
 
 # ---------------------------------------------------------
 # 2. PID Configuration
@@ -39,21 +61,43 @@ print(f"Controller active. Target setpoint: {TARGET_TEMP_C} °C")
 # ---------------------------------------------------------
 try:
     while True:
-        # Step A: Read temperature from SHT45
-        temp_c, humidity = sht.measurements
-        
+        # Step A: Read temperature from every SHT45 on the mux
+        readings = {}
+        for channel, sht in sensors.items():
+            try:
+                readings[channel] = sht.measurements
+            except (OSError, RuntimeError):
+                print(f"  Channel {channel}: read failed")
+
+        if not readings:
+            heatpad.value = 0  # No valid readings: fail safe with heat off
+            time.sleep(1)
+            continue
+
+        # Control on the average temperature across all sensors
+        temp_c = sum(t for t, _ in readings.values()) / len(readings)
+
         # Step B: Calculate required PID output (0.0 to 1.0)
         p_duty_cycle = pid(temp_c)
         
         # Step C: Update MOSFET PWM duty cycle
         heatpad.value = p_duty_cycle
+
+        # Step C2: Fan on at or above FAN_ON_TEMP_C, off below it
+        fan.value = FAN_SPEED if temp_c >= FAN_ON_TEMP_C else 0
         
         # Step D: Log operational metrics
+        for channel, (ch_temp, ch_humidity) in readings.items():
+            print(
+                f"  Channel {channel}: "
+                f"Temp: {ch_temp:.2f}°C | "
+                f"Humidity: {ch_humidity:.1f}%"
+            )
         print(
-            f"Temp: {temp_c:.2f}°C | "
+            f"Avg Temp: {temp_c:.2f}°C | "
             f"Target: {TARGET_TEMP_C:.1f}°C | "
             f"Heat Power: {p_duty_cycle * 100:5.1f}% | "
-            f"Humidity: {humidity:.1f}%"
+            f"Fan: {fan.value * 100:5.1f}%"
         )
         
         time.sleep(1)
@@ -63,3 +107,5 @@ except KeyboardInterrupt:
 finally:
     heatpad.value = 0  # Turn off heatpad safely
     heatpad.close()
+    fan.value = 0
+    fan.close()
