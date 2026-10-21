@@ -3,7 +3,7 @@ import matplotlib.pyplot as plt
 from pathlib import Path
 
 # ===== Configuration =====
-CSV_FILE = Path("sensor_data/run_2026-10-18_19-05-19.csv")
+CSV_FILE = Path("sensor_data/run_2026-10-21_19-18-34.csv")
 TARGET_TEMP_C = 37.5
 
 # ===== Load CSV =====
