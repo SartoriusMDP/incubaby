@@ -43,24 +43,49 @@ print(f"Logging sensor data to: {CSV_FILE}")
 # ---------------------------------------------------------
 # 2. SENSOR INITIALIZATION
 # ---------------------------------------------------------
-# SparkFun Qwiic I2C multiplexer (TCA9548A)
+
+# ---------------------------------------------------------
+# 2. SENSOR INITIALIZATION
+# ---------------------------------------------------------
+print("DEBUG 1: Starting I2C initialization", flush=True)
 i2c = board.I2C()
+
+print("DEBUG 2: Creating multiplexer", flush=True)
 mux = adafruit_tca9548a.TCA9548A(i2c)
 
-# Find SHT45 sensors on mux channels 0-7.
+print("DEBUG 3: Multiplexer initialized", flush=True)
+print("DEBUG 4: Beginning sensor discovery", flush=True)
+
 sensors = {}
 
 for channel in range(8):
+    print(f"DEBUG 5: Checking channel {channel}", flush=True)
+
     try:
-        sht = adafruit_sht4x.SHT4x(mux[channel])
+        channel_i2c = mux[channel]
+        print(f"DEBUG 6: Channel {channel} selected", flush=True)
+
+        sht = adafruit_sht4x.SHT4x(channel_i2c)
+        print(f"DEBUG 7: Sensor detected on channel {channel}",
+              flush=True)
+
         sht.mode = adafruit_sht4x.Mode.NOHEAT_HIGHPRECISION
         sensors[channel] = sht
-        print(f"Found SHT45 on mux channel {channel}")
-    except (ValueError, OSError, RuntimeError):
-        pass
+
+        print(f"Found SHT45 on mux channel {channel}", flush=True)
+
+    except (ValueError, OSError, RuntimeError) as error:
+        print(
+            f"Channel {channel} unavailable: "
+            f"{type(error).__name__}: {error}",
+            flush=True,
+        )
 
 if not sensors:
     raise RuntimeError("No SHT45 sensors found on any mux channel")
+
+print(f"DEBUG 8: Found {len(sensors)} sensor(s)", flush=True)
+
 
 # ---------------------------------------------------------
 # 3. GPIO CONFIGURATION (BCM GPIO NUMBERS)
