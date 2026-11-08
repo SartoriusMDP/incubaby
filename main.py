@@ -1,8 +1,9 @@
-
-import time
 import csv
-from pathlib import Path
+import signal
+import sys
+import time
 from datetime import datetime
+from pathlib import Path
 
 import board
 import adafruit_sht4x
@@ -10,8 +11,12 @@ import adafruit_tca9548a
 from gpiozero import PWMOutputDevice, OutputDevice
 from simple_pid import PID
 
+# Make "systemctl stop" / shutdown run the finally: block below,
+# so all outputs are turned OFF cleanly.
+signal.signal(signal.SIGTERM, lambda signum, frame: sys.exit(0))
+
 # ---------------------------------------------------------
-# 1. CSV DATA LOGGING — NEW FILE FOR EACH RUN
+# 1. CSV DATA LOGGING - NEW FILE FOR EACH RUN
 # ---------------------------------------------------------
 BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR / "sensor_data"
@@ -29,6 +34,7 @@ with open(CSV_FILE, "w", newline="") as f:
     writer.writerow([
         "Timestamp",
         "Sensor_Channel",
+        "Sensor_Name",
         "Temperature_C",
         "Temperature_F",
         "Humidity_RH",
@@ -41,51 +47,112 @@ print(f"Run started at: {START_TIME.strftime('%Y-%m-%d %H:%M:%S')}")
 print(f"Logging sensor data to: {CSV_FILE}")
 
 # ---------------------------------------------------------
-# 2. SENSOR INITIALIZATION
+# 2. SENSOR INITIALIZATION  (2 x TCA9548A = up to 16 sensors)
 # ---------------------------------------------------------
+MUX_ADDRESSES = [0x70, 0x71]  # 0x71 = A0 jumper bridged on the second mux
 
-# ---------------------------------------------------------
-# 2. SENSOR INITIALIZATION
-# ---------------------------------------------------------
-print("DEBUG 1: Starting I2C initialization", flush=True)
+SENSOR_NAMES = {
+    0: "Right Side Box  ",
+    1: "Left Side Box   ",
+    2: "Back Cell Tray  ",
+    3: "Right Cell Tray ",
+    4: "Left Cell Tray  ",
+    5: "Top             ",
+    6: "Bottom Left     ",
+    7: "Bottom Right    ",
+    8: "Bottom Box      ",
+    9: "Ambient         "
+    # 5 ... 15: add as you wire them
+}
+
+def sensor_name(sensor_id):
+    return SENSOR_NAMES.get(sensor_id, f"Sensor {sensor_id}")
+
+CHANNELS_PER_MUX = 8
+MAX_SENSORS = len(MUX_ADDRESSES) * CHANNELS_PER_MUX  # 16
+DISCOVERY_RETRIES = 3         # attempts per mux channel
+
+# Sensor IDs run 0..15:  ID = mux_index * 8 + channel
+#   mux 0x70, channels 0-7  ->  IDs 0-7   (same IDs as before)
+#   mux 0x71, channels 0-7  ->  IDs 8-15
+
 i2c = board.I2C()
 
-print("DEBUG 2: Creating multiplexer", flush=True)
-mux = adafruit_tca9548a.TCA9548A(i2c)
 
-print("DEBUG 3: Multiplexer initialized", flush=True)
-print("DEBUG 4: Beginning sensor discovery", flush=True)
-
-sensors = {}
-
-for channel in range(8):
-    print(f"DEBUG 5: Checking channel {channel}", flush=True)
-
+def reset_mux(address):
+    """Deselect every channel on one mux. Also works as a presence
+    check: returns False if nothing answers at that address."""
+    while not i2c.try_lock():
+        time.sleep(0)
     try:
-        channel_i2c = mux[channel]
-        print(f"DEBUG 6: Channel {channel} selected", flush=True)
+        i2c.writeto(address, bytes([0]))
+        return True
+    except (OSError, RuntimeError):
+        return False
+    finally:
+        i2c.unlock()
 
-        sht = adafruit_sht4x.SHT4x(channel_i2c)
-        print(f"DEBUG 7: Sensor detected on channel {channel}",
-              flush=True)
 
-        sht.mode = adafruit_sht4x.Mode.NOHEAT_HIGHPRECISION
-        sensors[channel] = sht
+def release_bus():
+    """A failed transfer can leak the I2C lock and leave a mux channel
+    selected. Release the lock and deselect all channels on both muxes,
+    so two sensors (both at 0x44) are never active at the same time."""
+    try:
+        i2c.unlock()
+    except Exception:
+        pass
+    for address in MUX_ADDRESSES:
+        reset_mux(address)
 
-        print(f"Found SHT45 on mux channel {channel}", flush=True)
 
-    except (ValueError, OSError, RuntimeError) as error:
+print("Scanning mux channels for SHT45 sensors...", flush=True)
+
+sensors = {}  # sensor ID -> SHT4x object
+
+for mux_index, address in enumerate(MUX_ADDRESSES):
+    if not reset_mux(address):
         print(
-            f"Channel {channel} unavailable: "
-            f"{type(error).__name__}: {error}",
+            f"Mux {mux_index} (0x{address:02X}): not responding, "
+            f"skipping its {CHANNELS_PER_MUX} channels",
             flush=True,
         )
+        continue
+
+    mux = adafruit_tca9548a.TCA9548A(i2c, address=address)
+
+    for channel in range(CHANNELS_PER_MUX):
+        sensor_id = mux_index * CHANNELS_PER_MUX + channel
+
+        for attempt in range(DISCOVERY_RETRIES):
+            try:
+                sht = adafruit_sht4x.SHT4x(mux[channel])
+                sht.mode = adafruit_sht4x.Mode.NOHEAT_HIGHPRECISION
+                sensors[sensor_id] = sht
+                print(
+                    f"Found SHT45: ID {sensor_id} "
+                    f"(mux 0x{address:02X}, channel {channel})",
+                    flush=True,
+                )
+                break
+            except (ValueError, OSError, RuntimeError) as error:
+                release_bus()
+                last_error = f"{type(error).__name__}: {error}"
+                time.sleep(0.1)
+        else:
+            print(
+                f"ID {sensor_id} (mux 0x{address:02X}, channel {channel}): "
+                f"no sensor ({last_error})",
+                flush=True,
+            )
 
 if not sensors:
     raise RuntimeError("No SHT45 sensors found on any mux channel")
 
-print(f"DEBUG 8: Found {len(sensors)} sensor(s)", flush=True)
-
+print(
+    f"Found SHT45: {sensor_name(sensor_id)} "
+    f"(ID {sensor_id}, mux 0x{address:02X}, channel {channel})",
+    flush=True,
+)
 
 # ---------------------------------------------------------
 # 3. GPIO CONFIGURATION (BCM GPIO NUMBERS)
@@ -136,6 +203,10 @@ print("Humidity actuator: ON")
 # ---------------------------------------------------------
 TARGET_TEMP_C = 37.5
 
+# Mux channels averaged for PID control. Any other channel is logged
+# but does not affect the heatpad (channel 5 is the control sensor).
+AVERAGE_CHANNELS = (0, 1, 2, 3, 4)
+
 pid = PID(
     Kp=5.0,
     Ki=0.05,
@@ -164,19 +235,30 @@ try:
                     humidity_rh,
                 )
             except (OSError, RuntimeError) as error:
-                print(f"Channel {channel}: read failed: {error}")
+                release_bus()
+                print(f"{sensor_name(channel)}: read failed: {error}")
 
-        # Fail safe: disable heating if all sensor reads fail.
-        if not readings:
+        average_temps = [
+            readings[channel][0]
+            for channel in AVERAGE_CHANNELS
+            if channel in readings
+        ]
+
+        # Fail safe: disable heating if no averaged sensor could be read.
+        if not average_temps:
             heatpad.value = 0
-            print("WARNING: No valid sensor readings; heatpad OFF")
+            print("WARNING: No valid readings to average; heatpad OFF")
             time.sleep(1)
             continue
 
+        if len(readings) < len(sensors):
+            print(
+                f"WARNING: only {len(readings)} of {len(sensors)} "
+                f"sensors read this cycle"
+            )
+
         # Average temperature for PID control.
-        temp_c = sum(
-            temperature for temperature, humidity in readings.values()
-        ) / len(readings)
+        temp_c = sum(average_temps) / len(average_temps)
 
         # Calculate heatpad PWM duty cycle.
         p_duty_cycle = pid(temp_c)
@@ -190,7 +272,7 @@ try:
         # To turn cooling ON:  cooling.on()
         # To turn cooling OFF: cooling.off()
 
-        # Append readings to the daily CSV file.
+        # Append readings to this run's CSV file.
         timestamp = datetime.now().isoformat(timespec="seconds")
 
         with open(CSV_FILE, "a", newline="") as f:
@@ -200,6 +282,7 @@ try:
                 writer.writerow([
                     timestamp,
                     channel,
+                    sensor_name(channel),
                     round(ch_temp, 2),
                     round(ch_temp * 9 / 5 + 32, 2),
                     round(ch_humidity, 1),
@@ -213,7 +296,7 @@ try:
         # Print diagnostic information.
         for channel, (ch_temp, ch_humidity) in readings.items():
             print(
-                f"Sensor {channel}: "
+                f"{sensor_name(channel):<14}"
                 f"Temp: {ch_temp:.2f} °C | "
                 f"Humidity: {ch_humidity:.1f}% RH"
             )
