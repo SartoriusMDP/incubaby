@@ -19,3 +19,5 @@ rpi_ws281x==5.0.0
 simple-pid==2.0.1
 sysv_ipc==1.2.0
 typing_extensions==4.16.0
+matplotlib==3.9.2
+pandas==2.2.3

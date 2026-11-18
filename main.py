@@ -178,11 +178,11 @@ cooling = OutputDevice(
     initial_value=COOLING_ON_AT_START,
 )
 
-# GPIO 18: Heatpad PWM
+# GPIO 12 (physical pin 32): Heatpad PWM
 # PID controls duty cycle between 0% and 100%.
 heatpad = PWMOutputDevice(
-    pin=18,
-    frequency=1000,
+    pin=12,
+    frequency=10,
     initial_value=0,
 )
 
@@ -201,11 +201,11 @@ print("Humidity actuator: ON")
 # ---------------------------------------------------------
 # 4. PID CONFIGURATION
 # ---------------------------------------------------------
-TARGET_TEMP_C = 37.5
+TARGET_TEMP_C = 36.5
 
 # Mux channels averaged for PID control. Any other channel is logged
 # but does not affect the heatpad (channel 5 is the control sensor).
-AVERAGE_CHANNELS = (0, 1, 2, 3, 4)
+AVERAGE_CHANNELS = (2, 3, 4)
 
 pid = PID(
     Kp=5.0,
@@ -263,6 +263,7 @@ try:
         # Calculate heatpad PWM duty cycle.
         p_duty_cycle = pid(temp_c)
         heatpad.value = p_duty_cycle
+        # heatpad.value = 0
 
         # Keep fan and humidity actuator ON.
         fan.on()

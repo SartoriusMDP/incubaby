@@ -153,11 +153,11 @@ def load_run(csv_file):
         })
     )
 
-    return sensor_data, per_timestamp, df["Timestamp"].max()
+    return sensor_data, per_timestamp, df["Timestamp"].max(), names
 
 
 # ===== Drawing helpers =====
-def plot_sensors(ax, sensor_data, column):
+def plot_sensors(ax, sensor_data, names, column):
     for channel, group in sensor_data.groupby("Sensor_Channel"):
         ax.plot(
             group["Elapsed_Minutes"],
@@ -189,9 +189,9 @@ def finish_plot(fig, ax, title, subtitle, ylabel, path):
 
 
 # ===== The three plots =====
-def draw_temperature(sensor_data, per_timestamp, subtitle, path):
+def draw_temperature(sensor_data, per_timestamp, names, subtitle, path):
     fig, ax = plt.subplots(figsize=(12, 6))
-    plot_sensors(ax, sensor_data, "Temperature_C")
+    plot_sensors(ax, sensor_data, names, "Temperature_C")
 
     avg = per_timestamp.dropna(subset=["Average_Temperature_C"])
     if not avg.empty:
@@ -216,10 +216,10 @@ def draw_temperature(sensor_data, per_timestamp, subtitle, path):
                 "Temperature (°C)", path)
 
 
-def draw_humidity(sensor_data, per_timestamp, subtitle, path):
+def draw_humidity(sensor_data, per_timestamp, names, subtitle, path):
     fig, ax = plt.subplots(figsize=(12, 6))
     if not sensor_data.empty:
-        plot_sensors(ax, sensor_data, "Humidity_RH")
+        plot_sensors(ax, sensor_data, names, "Humidity_RH")
     else:
         ax.text(0.5, 0.5, "No valid humidity readings",
                 ha="center", va="center", transform=ax.transAxes)
@@ -227,7 +227,7 @@ def draw_humidity(sensor_data, per_timestamp, subtitle, path):
                 "Relative Humidity (% RH)", path)
 
 
-def draw_actuator_duty(sensor_data, per_timestamp, subtitle, path):
+def draw_actuator_duty(sensor_data, per_timestamp, names, subtitle, path):
     fig, ax = plt.subplots(figsize=(12, 6))
     ax.plot(
         per_timestamp["Elapsed_Minutes"],
@@ -262,7 +262,7 @@ def ignore_stop_signals():
 
 
 def render(csv_file, output_dir):
-    sensor_data, per_timestamp, last_reading = load_run(csv_file)
+    sensor_data, per_timestamp, last_reading, names = load_run(csv_file)
     if sensor_data.empty:
         print("Warning: no valid per-sensor readings found; "
               "plotting average and actuator data only.")
@@ -278,7 +278,7 @@ def render(csv_file, output_dir):
         initializer=ignore_stop_signals,
     ) as pool:
         futures = [
-            pool.submit(draw, sensor_data, per_timestamp, subtitle,
+            pool.submit(draw, sensor_data, per_timestamp, names, subtitle,
                         output_dir / filename)
             for draw, filename in PLOTS
         ]
