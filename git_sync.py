@@ -1,16 +1,14 @@
 """
-git_sync.py - commit and push sensor_data/ and plots/ to git.
+git_sync.py - Automatically commit and push sensor data to GitHub.
 
-Runs independently of main.py, so a slow or dead network can never
-affect the temperature control loop.
+Runs independently of main.py.
 
 Usage:
-    python3 git_sync.py            # loop forever, push every INTERVAL_S
-    python3 git_sync.py --once     # sync once and exit
-
-run_all.py also imports sync() and uses its True/False result.
+    python3 git_sync.py
+    python3 git_sync.py --once
 """
 
+import fcntl
 import signal
 import subprocess
 import sys
@@ -19,62 +17,115 @@ from datetime import datetime
 from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent
-DATA_DIR = BASE_DIR / "sensor_data"
-PLOTS_DIR = BASE_DIR / "plots"
-INTERVAL_S = 60        # push every 1 minute
-GIT_TIMEOUT_S = 60      # kill any git command that hangs this long
+
+INTERVAL_S = 60
+GIT_TIMEOUT_S = 60
+
+SYNC_PATHS = ("sensor_data", "plots")
+
+LOG_FILE = BASE_DIR / "git_sync.log"
+LOCK_FILE = BASE_DIR / ".git" / "git_sync.lock"
 
 stop_event = threading.Event()
 
 
 def log(message):
-    print(f"[{datetime.now():%Y-%m-%d %H:%M:%S}] git_sync: {message}",
-          flush=True)
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    line = f"[{timestamp}] git_sync: {message}"
+
+    print(line, flush=True)
+
+    with open(LOG_FILE, "a") as f:
+        f.write(line + "\n")
 
 
 def git(*args, check=True):
-    return subprocess.run(
+    result = subprocess.run(
         ["git", *args],
         cwd=BASE_DIR,
-        check=check,
         capture_output=True,
         text=True,
         timeout=GIT_TIMEOUT_S,
     )
 
+    if check and result.returncode != 0:
+        raise subprocess.CalledProcessError(
+            result.returncode,
+            result.args,
+            output=result.stdout,
+            stderr=result.stderr,
+        )
 
-def unpushed_commits():
-    """True if local commits exist that the remote doesn't have yet."""
-    result = git("rev-list", "--count", "@{u}..HEAD", check=False)
-    if result.returncode != 0:
-        return True  # no upstream set; let `git push` report the problem
-    return int(result.stdout.strip() or 0) > 0
+    return result
 
 
 def sync():
-    """Commit new data and push. Returns True if everything is pushed."""
+    """Stage, commit and push new data to GitHub."""
+
     try:
-        paths = [str(p) for p in (DATA_DIR, PLOTS_DIR) if p.exists()]
-        if paths:
-            git("add", *paths)
+        # Prevent two sync operations from interfering.
+        with open(LOCK_FILE, "a+") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
 
-        # Exit code 1 means something is staged and needs a commit.
-        if git("diff", "--cached", "--quiet", check=False).returncode != 0:
-            git("commit", "-m", f"data {datetime.now():%Y-%m-%d %H:%M:%S}")
+            try:
+                # Stage new and modified CSVs and plots.
+                paths = [
+                    path for path in SYNC_PATHS
+                    if (BASE_DIR / path).exists()
+                ]
 
-        # Checked separately so a failed push is retried next time.
-        if not unpushed_commits():
-            log("Nothing to push.")
-            return True
+                if paths:
+                    git("add", "-A", "--", *paths)
 
-        git("push")
-        log("Pushed.")
-        return True
+                # Check for staged changes.
+                diff = git(
+                    "diff", "--cached", "--quiet",
+                    check=False
+                )
+
+                if diff.returncode == 1:
+                    message = (
+                        f"data {datetime.now():%Y-%m-%d %H:%M:%S}"
+                    )
+
+                    git("commit", "-m", message)
+                    log("New data committed.")
+
+                elif diff.returncode != 0:
+                    raise RuntimeError(
+                        f"Git diff failed: {diff.stderr}"
+                    )
+
+                # Push local commits, including earlier failed pushes.
+                pending = git(
+                    "rev-list", "--count", "@{u}..HEAD"
+                )
+
+                count = int(pending.stdout.strip())
+
+                if count == 0:
+                    log("Already synced. No new commits.")
+                    return True
+
+                log(f"Pushing {count} commit(s)...")
+
+                git("push")
+
+                log("Successfully pushed to GitHub.")
+                return True
+
+            finally:
+                fcntl.flock(lock, fcntl.LOCK_UN)
+
+    except subprocess.TimeoutExpired:
+        log("Git operation timed out. Will retry.")
 
     except subprocess.CalledProcessError as error:
-        log(f"Git failed: {error.stderr.strip() or error}")
-    except subprocess.TimeoutExpired:
-        log("Git timed out (network down?). Will retry.")
+        log(f"Git error: {error.stderr or error}")
+
+    except (OSError, ValueError, RuntimeError) as error:
+        log(f"Sync error: {error}")
+
     return False
 
 
@@ -89,12 +140,13 @@ def main():
     signal.signal(signal.SIGINT, handle_signal)
     signal.signal(signal.SIGTERM, handle_signal)
 
-    log(f"Syncing every {INTERVAL_S} s. Ctrl+C to stop.")
+    log(f"Automatic Git syncing every {INTERVAL_S} seconds.")
+
     while not stop_event.is_set():
         sync()
         stop_event.wait(INTERVAL_S)
 
-    log("Stopping; doing a final sync.")
+    log("Stopping Git sync. Performing final push.")
     sync()
 
 
