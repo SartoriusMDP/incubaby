@@ -25,7 +25,7 @@ import git_sync
 BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR / "sensor_data"
 
-RUN_DURATION_HOURS = 1.5     # None = run until the service is stopped
+RUN_DURATION_HOURS = 2.0     # None = run until the service is stopped
 RESTART_DELAY_S = 10        # wait before restarting main.py after a crash
 PUSH_ATTEMPTS = 8           # final push retries (e.g. Wi-Fi still coming up)
 PUSH_RETRY_DELAY_S = 30

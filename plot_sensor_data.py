@@ -32,7 +32,7 @@ BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR / "sensor_data"
 PLOTS_DIR = BASE_DIR / "plots"
 LIVE_DIR = PLOTS_DIR / "live"
-TARGET_TEMP_C = 37.5
+TARGET_TEMP_C = 36.5
 REFRESH_S = 60  # how often live mode checks for new data
 
 NUMERIC_COLS = [
