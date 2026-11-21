@@ -32,7 +32,7 @@ BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR / "sensor_data"
 PLOTS_DIR = BASE_DIR / "plots"
 LIVE_DIR = PLOTS_DIR / "live"
-TARGET_TEMP_C = 36.5
+TARGET_TEMP_C = 37.0
 REFRESH_S = 60  # how often live mode checks for new data
 
 NUMERIC_COLS = [
@@ -212,6 +212,23 @@ def draw_temperature(sensor_data, per_timestamp, names, subtitle, path):
         linewidth=1.5,
         label=f"Target ({TARGET_TEMP_C}°C)",
     )
+
+    ax.axhline(
+        36.5,
+        color=SECONDARY_INK,
+        linestyle="--",
+        linewidth=1.5,
+        label=f"Target ({36.5}°C)",
+    )
+
+    ax.axhline(
+        37.5,
+        color=SECONDARY_INK,
+        linestyle="--",
+        linewidth=1.5,
+        label=f"Target ({37.5}°C)",
+    )
+
     finish_plot(fig, ax, "SHT45 Temperature vs. Time", subtitle,
                 "Temperature (°C)", path)
 

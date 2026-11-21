@@ -201,7 +201,7 @@ print("Humidity actuator: ON")
 # ---------------------------------------------------------
 # 4. PID CONFIGURATION
 # ---------------------------------------------------------
-TARGET_TEMP_C = 36.5
+TARGET_TEMP_C = 37
 
 # Mux channels averaged for PID control. Any other channel is logged
 # but does not affect the heatpad (channel 5 is the control sensor).
